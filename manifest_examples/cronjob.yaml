@@ -1,0 +1,33 @@
+# CronJob テスト用manifest
+# 0-10 secランダムにスリープしたあと成功/失敗もランダムに返す
+#
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: hello
+spec:
+  schedule: "*/1 * * * *"
+  jobTemplate:
+    metadata:
+      annotations:
+        notify-slack.finc.com/channel: "#times_sre"
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          containers:
+          - name: hello
+            image: busybox
+            imagePullPolicy: IfNotPresent
+            command:
+            - /bin/sh
+            - -c
+            - |
+              num=$(shuf -i 0-10 -n 1)
+              echo "sleep $num"
+              sleep $num
+              result=$(shuf -i 0-1 -n 1)
+              echo "result $result"
+              test $result -eq 0
+          restartPolicy: OnFailure
+
