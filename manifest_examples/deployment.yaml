@@ -24,4 +24,6 @@ spec:
         env:
           - name: DEFAULT_CHANNEL
             value: "#bot_sandbox"
+          - name: SLACK_DEFAULT_ENABLED
+            value: "false"
 

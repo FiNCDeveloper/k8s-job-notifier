@@ -71,6 +71,8 @@ func (c *MainController) sendEvent(ctx context.Context, job *batchv1.Job) {
 		Resource:  job,
 	}
 
+	// TODO: 起動時に過去のイベントも送信されてくるので日付をチェックして過去のイベントは送信しないように実装
+
 	h, err := handler.CreateHandler()
 	if err != nil {
 		return

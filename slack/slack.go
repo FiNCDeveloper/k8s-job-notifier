@@ -24,6 +24,7 @@ type Slack struct {
 	DefaultChannel   string
 	Title            string
 	NotifyCondisions []string
+	DefaultEnabled   bool
 }
 
 const (
@@ -57,10 +58,17 @@ func (s *Slack) Handle(e event.Event) {
 	}
 	annotations := job.GetAnnotations()
 
-	// 明示的にfalseが指定されているときのみ無効化する
-	// if annotations[EnabledAnnotation] == "false" {
-	// 	return
-	// }
+	enabled := s.DefaultEnabled
+	switch s := annotations[EnabledAnnotation]; s {
+	case "true":
+		enabled = true
+	case "false":
+		enabled = false
+	}
+	if !enabled {
+		log.Printf("%s ignore, annotation value: %s", job.Name, annotations[EnabledAnnotation])
+		return
+	}
 
 	var notifyCondisions []string
 	if len(annotations[NotifyConditionAnnotation]) == 0 {
@@ -69,7 +77,7 @@ func (s *Slack) Handle(e event.Event) {
 		notifyCondisions = strings.Split(annotations[NotifyConditionAnnotation], ",")
 	}
 
-	isSend := false
+	isNotifyEvent := false
 	jobCon := strings.ToLower(string(job.Status.Conditions[0].Type))
 
 	for _, con := range notifyCondisions {
@@ -77,12 +85,12 @@ func (s *Slack) Handle(e event.Event) {
 		con = strings.ToLower(con)
 
 		if con == jobCon {
-			isSend = true
+			isNotifyEvent = true
 			break
 		}
 	}
 
-	if !isSend {
+	if !isNotifyEvent {
 		return
 	}
 
