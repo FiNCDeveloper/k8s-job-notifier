@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	"github.com/FiNCDeveloper/k8s-job-notifier/event"
 	"github.com/FiNCDeveloper/k8s-job-notifier/handler"
@@ -14,7 +15,8 @@ import (
 )
 
 type MainController struct {
-	client kubernetes.Interface
+	client    kubernetes.Interface
+	startTime time.Time
 }
 
 func NewMainController(client kubernetes.Interface) MainController {
@@ -24,6 +26,9 @@ func NewMainController(client kubernetes.Interface) MainController {
 }
 
 func (c *MainController) Run() {
+
+	c.startTime = time.Now().Local()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -71,13 +76,14 @@ func (c *MainController) sendEvent(ctx context.Context, job *batchv1.Job) {
 		Resource:  job,
 	}
 
-	// TODO: 起動時に過去のイベントも送信されてくるので日付をチェックして過去のイベントは送信しないように実装
-
-	h, err := handler.CreateHandler()
-	if err != nil {
-		return
+	// 起動時に過去のイベントも送信されてくるのでリソースのCreationTimestampをチェックして過去のイベントは送信しないように実装
+	if job.CreationTimestamp.Sub(c.startTime).Seconds() > 0 {
+		h, err := handler.CreateHandler()
+		if err != nil {
+			return
+		}
+		go h.Handle(e)
 	}
-	go h.Handle(e)
 }
 
 func (c *MainController) cronjobEvent(ctx context.Context, cj *batchv1beta1.CronJob) {
