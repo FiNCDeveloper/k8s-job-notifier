@@ -1,7 +1,7 @@
 # CronJob テスト用manifest
 # 0-10 secランダムにスリープしたあと成功/失敗もランダムに返す
 #
-apiVersion: batch/v1beta1
+apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: hello
