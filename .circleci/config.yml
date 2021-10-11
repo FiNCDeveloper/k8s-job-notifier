@@ -1,0 +1,69 @@
+version: 2.1
+
+orbs:
+  aws-ecr: circleci/aws-ecr@6.14.0
+
+jobs:
+  test:
+    docker:
+      - image: circleci/golang:1.16
+    parallelism: 2
+    environment:
+      TEST_RESULTS: /tmp/test-results
+    steps:
+      - checkout
+      - run: mkdir -p $TEST_RESULTS
+      - restore_cache:
+          keys:
+            - go-mod-v4-{{ checksum "go.sum" }}
+      - run:
+          name: Run unit tests
+          command: |
+            PACKAGE_NAMES=$(go list ./... | circleci tests split --split-by=timings --timings-type=classname)
+            gotestsum --junitfile ${TEST_RESULTS}/gotestsum-report.xml -- $PACKAGE_NAMES
+      - save_cache:
+          key: go-mod-v4-{{ checksum "go.sum" }}
+          paths:
+            - "/go/pkg/mod"
+      - store_artifacts:
+          path: /tmp/test-results
+          destination: raw-test-output
+      - store_test_results:
+          path: /tmp/test-results
+
+  build_and_push:
+    machine:
+      enabled: true
+      docker_layer_caching: true
+    environment:
+      AWS_ECR_ACCOUNT_URL: 759549166074.dkr.ecr.ap-northeast-1.amazonaws.com
+      AWS_REGION: "ap-northeast-1"
+    working_directory: ~/go/src/github.com/FiNCDeveloper/job_notifier
+    steps:
+      - checkout
+      - aws-ecr/build-and-push-image:
+          create-repo: true
+          no-output-timeout: 10m
+          repo: job_notifier
+          skip-when-tags-exist: false
+          tag: 'latest,${CIRCLE_SHA1},${CIRCLE_TAG}'
+
+workflows:
+  version: 2
+  build_and_push:
+    jobs:
+      - test:
+          context: default
+          filters: # tagの場合はrequireで実行されるjobにも必要
+            tags:
+              only: /^\d+\.\d+\.\d+$/
+      - build_and_push:
+          requires:
+            - test
+          context: default
+          filters:
+            branches:
+              only:
+                - main
+            tags:
+              only: /^\d+\.\d+\.\d+$/
