@@ -15,6 +15,8 @@ Name: %s/%s
 Message: %s
 Status: %s
 CompletionTime: %s
+Print log command: %s
+Rerun command: %s
 `
 
 // Slack handler implements handler.Handler interface,
@@ -131,12 +133,24 @@ func slackColor(t batchv1.JobConditionType) string {
 func buildMessage(e event.Event) string {
 	job := e.Resource.(*batchv1.Job)
 
+	logCommand := fmt.Sprintf("`kubectl logs -n %s job/%s`", job.Namespace, job.Name)
+
+	var cronName string
+	rerunCommand := "Unknown. Becuase base CronJob resource notfound."
+
+	if len(job.OwnerReferences) > 0 {
+		cronName = job.OwnerReferences[0].Name
+		rerunCommand = fmt.Sprintf("`kubectl create job %s-debug -n %s --from cronjob/%s`", job.Name, job.Namespace, cronName)
+	}
+
 	// 同時実行数が1前提で作られるので仕様を考える
 	s := fmt.Sprintf(slackMsg,
 		job.Namespace, job.Name,
 		job.Status.Conditions[0].Message,
 		job.Status.Conditions[0].Type,
 		job.Status.CompletionTime,
+		logCommand,
+		rerunCommand,
 	)
 	return s
 }
