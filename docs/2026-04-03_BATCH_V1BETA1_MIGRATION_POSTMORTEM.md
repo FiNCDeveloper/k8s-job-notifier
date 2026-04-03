@@ -81,26 +81,20 @@ kubent
 
 job-notifier は4年間一度もイメージが更新されなかった。「動いている」ように見えても内部でエラーを吐き続けている場合がある。
 
-対策案:
-- ECR イメージの最終プッシュ日を定期的に監査
-- `imagePullPolicy: Always` + タグ固定なし（`:latest`）に依存するデプロイは、意図的にイメージを更新しない限り古いまま動き続ける
+- ECR イメージの最終プッシュ日を定期的に監査する
+- `imagePullPolicy: Always` + タグ固定なし（`:latest`）に依存するデプロイは、意図的にイメージを更新しない限り古いまま動き続けることに注意
 
 ### 3. 監視用ワークロードこそ監視が必要
 
 job-notifier は「他のジョブを監視する」ためのコンポーネントだが、job-notifier 自身の健全性を監視する仕組みがなかった。
 
-対策案:
-- job-notifier にヘルスチェックエンドポイント（`/healthz`）を追加し、readinessProbe を設定する
-- CronJob watcher / Job watcher の正常稼働を Prometheus メトリクスとして公開
-- 定期的な heartbeat 通知（例: 1日1回「job-notifier is alive」を Slack に送信）
+今回の障害で明らかになった論点：
+- **Pod が Running ≠ 正常稼働**: readinessProbe / livenessProbe が未設定だと、プロセスが起動しているだけで Running になる
+- **単純な `/healthz` では今回の障害は検知できない**: HTTP サーバーが応答する限り probe は通るが、内部の informer が壊れている状態は外部からは見えない
+- **エラーログが毎分出ていたにもかかわらず、ログ監視アラートが未設定だったため発覚が遅れた**
 
-### 4. Pod が Running ≠ 正常稼働
-
-readinessProbe / livenessProbe が設定されていないワークロードでは、プロセスが起動していれば Running になる。アプリケーションレベルの異常は検知できない。
-
-### 5. エラーログの監視
-
-毎分エラーが出続けていたにもかかわらず発覚までに長期間を要した。ログベースのアラート（例: DataDog Log Monitor で `Failed to watch` パターンを検知）があれば早期発見できた。
+具体的にどのような監視手法を導入するかについては、別途 ADR として議論する。
+→ [ADR: job-notifier 自身の健全性監視](./2026-04-03_ADR_JOB_NOTIFIER_HEALTH_MONITORING.md)
 
 ## 関連リソース
 
