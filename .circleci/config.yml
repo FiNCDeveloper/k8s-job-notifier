@@ -6,7 +6,7 @@ orbs:
 jobs:
   test:
     docker:
-      - image: circleci/golang:1.16
+      - image: cimg/go:1.22
     parallelism: 2
     environment:
       TEST_RESULTS: /tmp/test-results
@@ -17,6 +17,9 @@ jobs:
           keys:
             - go-mod-v4-{{ checksum "go.sum" }}
       - run:
+          name: Install gotestsum
+          command: go install gotest.tools/gotestsum@latest
+      - run:
           name: Run unit tests
           command: |
             PACKAGE_NAMES=$(go list ./... | circleci tests split --split-by=timings --timings-type=classname)
@@ -24,7 +27,7 @@ jobs:
       - save_cache:
           key: go-mod-v4-{{ checksum "go.sum" }}
           paths:
-            - "/go/pkg/mod"
+            - "/home/circleci/go/pkg/mod"
       - store_artifacts:
           path: /tmp/test-results
           destination: raw-test-output
