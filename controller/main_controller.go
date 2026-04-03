@@ -7,7 +7,6 @@ import (
 	"github.com/FiNCDeveloper/k8s-job-notifier/event"
 	"github.com/FiNCDeveloper/k8s-job-notifier/handler"
 	batchv1 "k8s.io/api/batch/v1"
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
@@ -45,14 +44,14 @@ func (c *MainController) Run() {
 		},
 	}, cache.Indexers{})
 
-	cronjobListWatcher := cache.NewListWatchFromClient(c.client.BatchV1beta1().RESTClient(), "cronjobs", v1.NamespaceAll, fields.Everything())
-	_, cronjobInformer := cache.NewIndexerInformer(cronjobListWatcher, &batchv1beta1.CronJob{}, 0, cache.ResourceEventHandlerFuncs{
+	cronjobListWatcher := cache.NewListWatchFromClient(c.client.BatchV1().RESTClient(), "cronjobs", v1.NamespaceAll, fields.Everything())
+	_, cronjobInformer := cache.NewIndexerInformer(cronjobListWatcher, &batchv1.CronJob{}, 0, cache.ResourceEventHandlerFuncs{
 
 		AddFunc: func(obj interface{}) {
-			c.cronjobEvent(ctx, obj.(*batchv1beta1.CronJob))
+			c.cronjobEvent(ctx, obj.(*batchv1.CronJob))
 		},
 		UpdateFunc: func(old interface{}, new interface{}) {
-			c.cronjobEvent(ctx, new.(*batchv1beta1.CronJob))
+			c.cronjobEvent(ctx, new.(*batchv1.CronJob))
 		},
 		DeleteFunc: func(obj interface{}) {
 		},
@@ -86,6 +85,6 @@ func (c *MainController) sendEvent(ctx context.Context, job *batchv1.Job) {
 	}
 }
 
-func (c *MainController) cronjobEvent(ctx context.Context, cj *batchv1beta1.CronJob) {
+func (c *MainController) cronjobEvent(ctx context.Context, cj *batchv1.CronJob) {
 	// 今の所cronjobのイベントに対しては何もしない
 }
