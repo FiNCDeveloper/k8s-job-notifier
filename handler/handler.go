@@ -21,7 +21,11 @@ func CreateHandler() (Handler, error) {
 	return h, nil
 }
 
-func createSlackHandler() (Handler, error) {
+// CreateSlackClient builds the *slack.Slack config from environment
+// variables. It is exposed (in addition to CreateHandler) so callers that
+// need Slack-specific behavior not covered by the Handler interface (e.g.
+// heartbeat notifications) can reuse the same configuration.
+func CreateSlackClient() *slack.Slack {
 	dc := os.Getenv("DEFAULT_CHANNEL")
 	if len(dc) == 0 {
 		dc = "#bot_sandbox"
@@ -43,5 +47,9 @@ func createSlackHandler() (Handler, error) {
 		Title:            "job notify",
 		NotifyCondisions: []string{"Failed"},
 		DefaultEnabled:   enabled,
-	}, nil
+	}
+}
+
+func createSlackHandler() (Handler, error) {
+	return CreateSlackClient(), nil
 }
