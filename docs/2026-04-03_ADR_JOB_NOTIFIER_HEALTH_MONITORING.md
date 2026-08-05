@@ -1,6 +1,6 @@
 # ADR: job-notifier 自身の健全性監視
 
-- **Status**: Proposed
+- **Status**: Accepted (Option B, 2026-08-05)
 - **Date**: 2026-04-03
 - **Context**: [2026-04-03_BATCH_V1BETA1_MIGRATION_POSTMORTEM.md](./2026-04-03_BATCH_V1BETA1_MIGRATION_POSTMORTEM.md)
 
@@ -192,4 +192,17 @@ A と B はトレードオフが異なるため、チームで議論して決定
 
 ## 決定
 
-(未決定 — チーム議論後に記入)
+**Option B（heartbeat 通知）を採用する。**
+
+2026-08-05、本 ADR が想定していたのと同種の「エラーログを出さないサイレント障害」（`Job.Status.Conditions` の並び順変化により通知条件マッチングが機能しなくなった）が実際に発生した。詳細は [`2026-08-05_JOB_CONDITIONS_ORDER_POSTMORTEM.md`](./2026-08-05_JOB_CONDITIONS_ORDER_POSTMORTEM.md) を参照。
+
+Option C（ログアラート）はエラーログを前提とするため今回のケースを検知できず、Option A（healthz + livenessProbe）は informer 自体は正常に sync していたため検知できない障害だった。Option B は「通知パス全体（informer → Slack API）が生きていることを能動的に確認する」ため、今回のようなケースを唯一検知できる。実装コストが低いことも踏まえ、まず Option B を導入する。
+
+Option A（healthz）や Option D（Prometheus メトリクス）は、より粒度の細かい監視が必要になった際に改めて検討する。
+
+## 改訂履歴
+
+| 日付 | 内容 |
+|---|---|
+| 2026-04-03 | 初版作成（Proposed） |
+| 2026-08-05 | Option B（heartbeat）採用を決定。実装は同日の condition 並び順修正 PR に含める |
