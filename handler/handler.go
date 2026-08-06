@@ -31,6 +31,11 @@ func CreateSlackClient() *slack.Slack {
 		dc = "#bot_sandbox"
 	}
 
+	hc := os.Getenv("HEARTBEAT_CHANNEL")
+	if len(hc) == 0 {
+		hc = "#system_alert_info"
+	}
+
 	enabled := false
 	switch s := os.Getenv("SLACK_DEFAULT_ENABLED"); s {
 	case "true":
@@ -44,6 +49,7 @@ func CreateSlackClient() *slack.Slack {
 	return &slack.Slack{
 		Token:            os.Getenv("SLACK_TOKEN"),
 		DefaultChannel:   dc,
+		HeartbeatChannel: hc,
 		Title:            "job notify",
 		NotifyCondisions: []string{"Failed"},
 		DefaultEnabled:   enabled,
