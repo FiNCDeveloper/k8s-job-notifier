@@ -53,42 +53,13 @@ const (
 
 // Handle handles the notification.
 func (s *Slack) Handle(e event.Event) {
-
-	//TODO: おそらく起動したときはConditions == 0 で判定できるはず
-	// job createのときはconditionsが空でくる、他にいい判定方法があればそれに変える
-	job := e.Resource.(*batchv1.Job)
-	if len(job.Status.Conditions) == 0 {
-		return
-	}
-	annotations := job.GetAnnotations()
-
-	enabled := s.DefaultEnabled
-	switch s := annotations[EnabledAnnotation]; s {
-	case "true":
-		enabled = true
-	case "false":
-		enabled = false
-	}
-	if !enabled {
-		log.Printf("%s ignore, annotation value: %s", job.Name, annotations[EnabledAnnotation])
-		return
-	}
-
-	var notifyCondisions []string
-	if len(annotations[NotifyConditionAnnotation]) == 0 {
-		notifyCondisions = s.NotifyCondisions
-	} else {
-		notifyCondisions = strings.Split(annotations[NotifyConditionAnnotation], ",")
-	}
-
-	// Kubernetes 1.25+ では Job.Status.Conditions の先頭に FailureTarget /
-	// SuccessCriteriaMet 等の中間 condition が入るため、Conditions[0] 固定ではなく
-	// 全 condition を走査して Status=True のものだけを通知条件と照合する。
-	matched := matchCondition(job.Status.Conditions, notifyCondisions)
+	matched := s.NotifiableCondition(e)
 	if matched == nil {
 		return
 	}
 
+	job := e.Resource.(*batchv1.Job)
+	annotations := job.GetAnnotations()
 	channel := annotations[ChannelAnnotation]
 	if len(channel) == 0 {
 		channel = s.DefaultChannel
@@ -108,6 +79,56 @@ func (s *Slack) Handle(e event.Event) {
 	}
 
 	log.Printf("Message successfully sent to channel %s at %s", channelID, timestamp)
+}
+
+// NotifiableCondition returns the Job condition the event should be notified
+// about, or nil when the event must not be notified.
+func (s *Slack) NotifiableCondition(e event.Event) *batchv1.JobCondition {
+
+	//TODO: おそらく起動したときはConditions == 0 で判定できるはず
+	// job createのときはconditionsが空でくる、他にいい判定方法があればそれに変える
+	job := e.Resource.(*batchv1.Job)
+	if len(job.Status.Conditions) == 0 {
+		return nil
+	}
+	annotations := job.GetAnnotations()
+
+	enabled := s.DefaultEnabled
+	switch s := annotations[EnabledAnnotation]; s {
+	case "true":
+		enabled = true
+	case "false":
+		enabled = false
+	}
+	if !enabled {
+		log.Printf("%s ignore, annotation value: %s", job.Name, annotations[EnabledAnnotation])
+		return nil
+	}
+
+	var notifyCondisions []string
+	if len(annotations[NotifyConditionAnnotation]) == 0 {
+		notifyCondisions = s.NotifyCondisions
+	} else {
+		notifyCondisions = strings.Split(annotations[NotifyConditionAnnotation], ",")
+	}
+
+	// Kubernetes 1.25+ では Job.Status.Conditions の先頭に FailureTarget /
+	// SuccessCriteriaMet 等の中間 condition が入るため、Conditions[0] 固定ではなく
+	// 全 condition を走査して Status=True のものだけを通知条件と照合する。
+	matched := matchCondition(job.Status.Conditions, notifyCondisions)
+	if matched == nil {
+		return nil
+	}
+
+	// 通知するのは condition が True に「なった」ときだけ。informer は watch 失敗後の
+	// relist などで変化のない Job も Update として再配信するので、現在の状態だけで
+	// 判定すると過去に失敗した Job をまとめて再通知してしまう。
+	if old, ok := e.OldResource.(*batchv1.Job); ok && old != nil &&
+		matchCondition(old.Status.Conditions, []string{string(matched.Type)}) != nil {
+		return nil
+	}
+
+	return matched
 }
 
 // matchCondition returns the first condition whose Status is True and whose

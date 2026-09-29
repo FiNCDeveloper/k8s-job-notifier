@@ -15,12 +15,14 @@ import (
 
 type MainController struct {
 	client    kubernetes.Interface
+	handler   handler.Handler
 	startTime time.Time
 }
 
-func NewMainController(client kubernetes.Interface) MainController {
+func NewMainController(client kubernetes.Interface, h handler.Handler) MainController {
 	return MainController{
-		client: client,
+		client:  client,
+		handler: h,
 	}
 }
 
@@ -32,17 +34,7 @@ func (c *MainController) Run() {
 	defer cancel()
 
 	jobListWatcher := cache.NewListWatchFromClient(c.client.BatchV1().RESTClient(), "jobs", v1.NamespaceAll, fields.Everything())
-	_, jobInformer := cache.NewIndexerInformer(jobListWatcher, &batchv1.Job{}, 0, cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			c.sendEvent(ctx, obj.(*batchv1.Job))
-		},
-		UpdateFunc: func(old interface{}, new interface{}) {
-			c.sendEvent(ctx, new.(*batchv1.Job))
-		},
-		DeleteFunc: func(obj interface{}) {
-			c.deleteEvent(ctx, obj.(*batchv1.Job))
-		},
-	}, cache.Indexers{})
+	jobInformer := c.newJobInformer(ctx, jobListWatcher)
 
 	cronjobListWatcher := cache.NewListWatchFromClient(c.client.BatchV1().RESTClient(), "cronjobs", v1.NamespaceAll, fields.Everything())
 	_, cronjobInformer := cache.NewIndexerInformer(cronjobListWatcher, &batchv1.CronJob{}, 0, cache.ResourceEventHandlerFuncs{
@@ -64,25 +56,50 @@ func (c *MainController) Run() {
 	select {} // Block all
 }
 
+func (c *MainController) newJobInformer(ctx context.Context, lw cache.ListerWatcher) cache.Controller {
+	_, jobInformer := cache.NewIndexerInformer(lw, &batchv1.Job{}, 0, cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			c.addEvent(ctx, obj.(*batchv1.Job))
+		},
+		UpdateFunc: func(old interface{}, new interface{}) {
+			c.updateEvent(ctx, old.(*batchv1.Job), new.(*batchv1.Job))
+		},
+		DeleteFunc: func(obj interface{}) {
+			c.deleteEvent(ctx, obj.(*batchv1.Job))
+		},
+	}, cache.Indexers{})
+	return jobInformer
+}
+
 func (c *MainController) deleteEvent(ctx context.Context, job *batchv1.Job) {
 	// log.Printf("job event: %s, %s", job.GetName(), job.Status.String())
 }
 
-func (c *MainController) sendEvent(ctx context.Context, job *batchv1.Job) {
-	e := event.Event{
+func (c *MainController) addEvent(ctx context.Context, job *batchv1.Job) {
+	// 起動時に過去のJobもAddとして送信されてくるので、CreationTimestampをチェックして起動前に作られたJobは送信しない。
+	// Updateには適用しない。起動前に作られ起動後に失敗したJobも通知対象であり、
+	// 再配信による重複はhandlerが状態遷移で判定して防ぐ。
+	if job.CreationTimestamp.Sub(c.startTime).Seconds() <= 0 {
+		return
+	}
+	c.sendEvent(ctx, event.Event{
 		Namespace: job.Namespace,
 		Type:      job.TypeMeta.Kind,
 		Resource:  job,
-	}
+	})
+}
 
-	// 起動時に過去のイベントも送信されてくるのでリソースのCreationTimestampをチェックして過去のイベントは送信しないように実装
-	if job.CreationTimestamp.Sub(c.startTime).Seconds() > 0 {
-		h, err := handler.CreateHandler()
-		if err != nil {
-			return
-		}
-		go h.Handle(e)
-	}
+func (c *MainController) updateEvent(ctx context.Context, old *batchv1.Job, new *batchv1.Job) {
+	c.sendEvent(ctx, event.Event{
+		Namespace:   new.Namespace,
+		Type:        new.TypeMeta.Kind,
+		Resource:    new,
+		OldResource: old,
+	})
+}
+
+func (c *MainController) sendEvent(ctx context.Context, e event.Event) {
+	go c.handler.Handle(e)
 }
 
 func (c *MainController) cronjobEvent(ctx context.Context, cj *batchv1.CronJob) {
