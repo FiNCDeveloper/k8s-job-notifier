@@ -20,22 +20,22 @@ import (
 
 // recordingHandler applies the real Slack notification decision and records
 // the names of the Jobs that would have been posted, instead of posting.
+// handled receives one value per completed Handle call, notified or not.
 type recordingHandler struct {
 	decider  *slack.Slack
 	mu       sync.Mutex
 	notified []string
-	names    chan string
+	handled  chan struct{}
 }
 
 func (h *recordingHandler) Handle(e event.Event) {
+	defer func() { h.handled <- struct{}{} }()
 	if h.decider.NotifiableCondition(e) == nil {
 		return
 	}
-	name := e.Resource.(*batchv1.Job).Name
 	h.mu.Lock()
-	h.notified = append(h.notified, name)
+	h.notified = append(h.notified, e.Resource.(*batchv1.Job).Name)
 	h.mu.Unlock()
-	h.names <- name
 }
 
 func testJob(name string, created time.Time, resourceVersion string, failed bool) batchv1.Job {
@@ -112,7 +112,7 @@ func TestJobInformerNotifiesTransitionsOnlyAcrossRelist(t *testing.T) {
 
 	h := &recordingHandler{
 		decider: &slack.Slack{NotifyCondisions: []string{"Failed"}},
-		names:   make(chan string, 10),
+		handled: make(chan struct{}, 20),
 	}
 	c := &MainController{handler: h, startTime: startTime}
 
@@ -120,18 +120,18 @@ func TestJobInformerNotifiesTransitionsOnlyAcrossRelist(t *testing.T) {
 	defer close(stopCh)
 	go c.newJobInformer(context.Background(), lw).Run(stopCh)
 
-	// K は relist の最後の要素なので、K が通知された時点で J/L/M の再配信も handler に渡っている。
+	// handler は goroutine で呼ばれるので、handler に渡るイベントがすべて処理し終わるまで待つ。
+	// 渡るのは次の 7 件（L/M/D の初回 Add は起動前に作られたので渡らず、relist で消えた D の削除も渡らない）:
+	// 初回 list の Add J / watch の Update J, L / relist の Update J, L, M と Add K
+	const wantHandled = 7
 	timeout := time.After(10 * time.Second)
-	for waiting := true; waiting; {
+	for i := 0; i < wantHandled; i++ {
 		select {
-		case name := <-h.names:
-			waiting = name != "K"
+		case <-h.handled:
 		case <-timeout:
-			t.Fatalf("K was never notified; notified so far: %v", h.snapshot())
+			t.Fatalf("handled %d of %d events; notified so far: %v", i, wantHandled, h.snapshot())
 		}
 	}
-	// handler は goroutine で呼ばれるため、再配信分が遅れて記録される余地を待つ。
-	time.Sleep(200 * time.Millisecond)
 
 	got := h.snapshot()
 	want := []string{"J", "K", "L"}
