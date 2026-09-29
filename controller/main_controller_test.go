@@ -59,16 +59,18 @@ func testJob(name string, created time.Time, resourceVersion string, failed bool
 
 // 2026-09-29 の本番障害の再現: watch が 503 で失敗して relist が走っても、既に通知済みの
 // 失敗 Job は再通知されず、状態遷移と relist で初めて見えた失敗 Job だけが通知される。
+// watch 断の間に削除された Job（relist では DeletedFinalStateUnknown で届く）で落ちないことも確認する。
 func TestJobInformerNotifiesTransitionsOnlyAcrossRelist(t *testing.T) {
 	startTime := time.Now()
 	before := startTime.Add(-time.Hour)
 	after := startTime.Add(time.Minute)
 
-	// 初回 list: 起動後に作られ実行中(J)、起動前に作られ実行中(L)、起動前に失敗済み(M)
+	// 初回 list: 起動後に作られ実行中(J)、起動前に作られ実行中(L)、起動前に失敗済み(M)、watch 断の間に削除される(D)
 	initialList := []batchv1.Job{
 		testJob("J", after, "10", false),
 		testJob("L", before, "11", false),
 		testJob("M", before, "12", true),
+		testJob("D", before, "9", true),
 	}
 	// watch: J と L が失敗に遷移する
 	firstWatch := watch.NewFakeWithChanSize(2, false)
@@ -77,7 +79,7 @@ func TestJobInformerNotifiesTransitionsOnlyAcrossRelist(t *testing.T) {
 	firstWatch.Modify(&jFailed)
 	firstWatch.Modify(&lFailed)
 	firstWatch.Stop()
-	// relist: J/L/M は変化なし、watch 断の間に作られ失敗した K が初めて見える
+	// relist: J/L/M は変化なし、D は消えており、watch 断の間に作られ失敗した K が初めて見える
 	relist := []batchv1.Job{jFailed, lFailed, initialList[2], testJob("K", after.Add(time.Minute), "15", true)}
 
 	var mu sync.Mutex

@@ -65,7 +65,14 @@ func (c *MainController) newJobInformer(ctx context.Context, lw cache.ListerWatc
 			c.updateEvent(ctx, old.(*batchv1.Job), new.(*batchv1.Job))
 		},
 		DeleteFunc: func(obj interface{}) {
-			c.deleteEvent(ctx, obj.(*batchv1.Job))
+			// relist で見つかった削除は *batchv1.Job ではなく cache.DeletedFinalStateUnknown で届くため、
+			// そのまま型アサーションすると panic してプロセスが落ちる。
+			if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				obj = tombstone.Obj
+			}
+			if job, ok := obj.(*batchv1.Job); ok {
+				c.deleteEvent(ctx, job)
+			}
 		},
 	}, cache.Indexers{})
 	return jobInformer
