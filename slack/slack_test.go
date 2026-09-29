@@ -98,7 +98,6 @@ func TestMatchCondition(t *testing.T) {
 }
 
 func TestNotifiableCondition(t *testing.T) {
-	s := &Slack{NotifyCondisions: []string{"Failed"}}
 	annotations := map[string]string{EnabledAnnotation: "true"}
 	job := func(conditions ...batchv1.JobCondition) *batchv1.Job {
 		j := &batchv1.Job{Status: batchv1.JobStatus{Conditions: conditions}}
@@ -110,15 +109,24 @@ func TestNotifiableCondition(t *testing.T) {
 	failureTargetOnly := job(cond("FailureTarget", corev1.ConditionTrue))
 
 	tests := []struct {
-		name       string
-		old        *batchv1.Job
-		new        *batchv1.Job
-		wantNotify bool
+		name             string
+		notifyConditions []string
+		old              *batchv1.Job
+		new              *batchv1.Job
+		wantNotify       bool
 	}{
 		{name: "first seen as failed (Add) is notified", old: nil, new: failed, wantNotify: true},
 		{name: "transition from running to failed is notified", old: running, new: failed, wantNotify: true},
 		{name: "transition from FailureTarget to Failed is notified", old: failureTargetOnly, new: failed, wantNotify: true},
 		{name: "unchanged failed job redelivered on relist is not notified", old: failed, new: failed, wantNotify: false},
+		{
+			// 先に True になった FailureTarget が残っていても、新たに True になった Failed は通知する
+			name:             "newly true Failed is notified while an earlier notified condition stays true",
+			notifyConditions: []string{"FailureTarget", "Failed"},
+			old:              failureTargetOnly,
+			new:              failed,
+			wantNotify:       true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -126,6 +134,11 @@ func TestNotifiableCondition(t *testing.T) {
 			e := event.Event{Resource: tt.new}
 			if tt.old != nil {
 				e.OldResource = tt.old
+			}
+
+			s := &Slack{NotifyCondisions: []string{"Failed"}}
+			if tt.notifyConditions != nil {
+				s.NotifyCondisions = tt.notifyConditions
 			}
 
 			got := s.NotifiableCondition(e)
