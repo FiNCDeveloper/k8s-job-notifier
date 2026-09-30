@@ -132,6 +132,12 @@ func TestJobInformerNotifiesTransitionsOnlyAcrossRelist(t *testing.T) {
 			t.Fatalf("handled %d of %d events; notified so far: %v", i, wantHandled, h.snapshot())
 		}
 	}
+	// 遅れて届く余分な呼び出し（重複通知の元）が無いことも確かめる。
+	select {
+	case <-h.handled:
+		t.Fatalf("handled more than %d events; notified so far: %v", wantHandled, h.snapshot())
+	case <-time.After(200 * time.Millisecond):
+	}
 
 	got := h.snapshot()
 	want := []string{"J", "K", "L"}

@@ -116,7 +116,15 @@ func (s *Slack) NotifiableCondition(e event.Event) *batchv1.JobCondition {
 	if old, ok := e.OldResource.(*batchv1.Job); ok && old != nil {
 		oldConditions = old.Status.Conditions
 	}
-	return newlyMatchedCondition(oldConditions, job.Status.Conditions, notifyCondisions)
+	matched := newlyMatchedCondition(oldConditions, job.Status.Conditions, notifyCondisions)
+	if matched == nil {
+		// 通知条件には一致するが変更前から True だった＝relist などによる再配信。
+		// 抑止が効いていることを本番ログで確かめられるように残す。
+		if already := matchCondition(job.Status.Conditions, notifyCondisions); already != nil {
+			log.Printf("%s/%s skip, %s was already true", job.Namespace, job.Name, already.Type)
+		}
+	}
+	return matched
 }
 
 // newlyMatchedCondition returns the first condition in conditions that matches
@@ -133,37 +141,43 @@ func newlyMatchedCondition(oldConditions, conditions []batchv1.JobCondition, not
 	// SuccessCriteriaMet 等の中間 condition が入るため、Conditions[0] 固定ではなく
 	// 全 condition を走査して Status=True のものだけを通知条件と照合する。
 	for i := range conditions {
-		matched := matchCondition(conditions[i:i+1], notifyConditions)
-		if matched == nil {
+		cond := conditions[i]
+		if !conditionMatches(cond, notifyConditions) {
 			continue
 		}
-		if matchCondition(oldConditions, []string{string(matched.Type)}) != nil {
+		if matchCondition(oldConditions, []string{string(cond.Type)}) != nil {
 			continue
 		}
-		return matched
+		return &cond
 	}
 	return nil
 }
 
-// matchCondition returns the first condition whose Status is True and whose
-// Type matches one of notifyConditions (case-insensitive, whitespace-trimmed).
+// matchCondition returns the first condition that satisfies conditionMatches.
 // Returns nil if none matches.
 func matchCondition(conditions []batchv1.JobCondition, notifyConditions []string) *batchv1.JobCondition {
 	for i := range conditions {
 		cond := conditions[i]
-		if cond.Status != corev1.ConditionTrue {
-			continue
-		}
-
-		conType := strings.ToLower(string(cond.Type))
-		for _, con := range notifyConditions {
-			con = strings.ToLower(strings.TrimSpace(con))
-			if con == conType {
-				return &cond
-			}
+		if conditionMatches(cond, notifyConditions) {
+			return &cond
 		}
 	}
 	return nil
+}
+
+// conditionMatches reports whether cond's Status is True and its Type matches
+// one of notifyConditions (case-insensitive, whitespace-trimmed).
+func conditionMatches(cond batchv1.JobCondition, notifyConditions []string) bool {
+	if cond.Status != corev1.ConditionTrue {
+		return false
+	}
+	conType := strings.ToLower(string(cond.Type))
+	for _, con := range notifyConditions {
+		if strings.ToLower(strings.TrimSpace(con)) == conType {
+			return true
+		}
+	}
+	return false
 }
 
 func slackColor(t batchv1.JobConditionType) string {
