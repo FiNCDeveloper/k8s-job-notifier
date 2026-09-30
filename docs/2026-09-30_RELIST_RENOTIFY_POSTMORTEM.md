@@ -1,8 +1,10 @@
 # ポストモーテム: informer の relist による過去の失敗 Job の一斉再通知
 
+時刻は特記のない限り UTC で記載する（job-notifier のログと Kubernetes の時刻が UTC のため）。
+
 ## Executive Summary
 
-- **Purpose**: 2026-09-30 05:17 JST に、数週間前に失敗し対応済みの Job の失敗通知が 45 件まとめて再送された障害の原因と対処を記録する
+- **Purpose**: 2026-09-29 20:17 UTC（2026-09-30 05:17 JST）に、数週間前に失敗し対応済みの Job の失敗通知が 45 件まとめて再送された障害の原因と対処を記録する
 - **Approach**:
   - 原因は、job-notifier が「Job が Failed に**なった**」ではなく「Job が Failed で**ある**」ことで通知していたこと。informer は watch の失敗後に全件を取り直し（relist）、変化のない Job も Update として再配信するため、そのたびに起動後に作られた失敗 Job を全部再通知していた
   - 対処として、通知条件の condition のうち、変更前の Job では True でなかったものが True になったときだけ通知するようにした（状態遷移での判定）
@@ -13,7 +15,7 @@
 
 ## 背景
 
-2026-09-30 05:17:32 JST、`#system_alert_fatal` などに job-notifier から失敗通知が届いた。対象の `advice-engine-production/weekly-report-error-watch-29805135` / `-29806575` は 2026-09-02 / 09-03 に失敗した Job で、当時すでに通知・対応済み（配信は正常で、監視側の判定の問題と結論済み）だった。
+2026-09-29 20:17:32 UTC（2026-09-30 05:17:32 JST）、`#system_alert_fatal` などに job-notifier から失敗通知が届いた。対象の `advice-engine-production/weekly-report-error-watch-29805135` / `-29806575` は 2026-09-02 / 09-03 に失敗した Job で、当時すでに通知・対応済み（配信は正常で、監視側の判定の問題と結論済み）だった。
 
 ## 調査で判明した事実
 
@@ -43,7 +45,7 @@ informer は「イベント」ではなく「オブジェクトの最新状態�
 ## 対処
 
 1. `event.Event` に変更前の Job（`OldResource`）を追加し、Update のときに渡すようにした（Add のときは nil）
-2. `slack.NotifiableCondition()` で、通知条件に一致する condition のうち、変更前の Job では True でなかったものがあるときだけ通知するようにした。通知条件が複数ある場合（例: `FailureTarget,Failed`）は先に True になったものが残り続けるため、一致した最初の condition ではなく、新たに True になったものを探す。Add（初めて見えた Job）はこれまでどおり通知する。これにより、relist で見逃していた Job（watch が切れている間に作られて失敗した Job）は通知され、変化のない再配信は通知されない
+2. `slack.NotifiableCondition()` で、通知条件に一致する condition のうち、変更前の Job では True でなかったものがあるときだけ通知するようにした。通知条件が複数ある場合（例: `FailureTarget,Failed`）は先に True になったものが残り続けるため、一致した最初の condition ではなく、新たに True になったものを探す。Add（初めて見えた Job）はこれまでどおり通知する。これにより、relist で見逃していた Job（watch が切れている間に作られて失敗した Job）は通知され、変化のない再配信は通知されない。再配信を抑止したときは `<namespace>/<name> skip, Failed was already true` のログを出し、次に relist が起きたときに修正が効いたことを本番ログで確かめられるようにした
 3. 起動時刻での絞り込みを Add のみに適用するようにした。Update の重複は 2 の遷移判定で防ぐ
 4. controller が通知処理（`handler.Handler`）を外から受け取るようにし、job informer の組み立てを `newJobInformer()` に切り出した。これにより、偽の ListerWatcher で今回の流れ（watch が 503 で失敗 → relist）を再現するテストを書けるようにした
 5. job informer の DeleteFunc で `cache.DeletedFinalStateUnknown` を展開するようにした。relist の時点で消えていた Job（watch 断の間に CronJob の履歴上限などで削除された Job）はこの型で届くため、旧実装の `obj.(*batchv1.Job)` は panic し、プロセスごと落ちていた（テストで再現を確認）。落ちると再起動の間に失敗した Job は通知されない
@@ -68,6 +70,14 @@ informer は「イベント」ではなく「オブジェクトの最新状態�
 - Production: 2026-08-14 18:27 UTC（2 件）と 2026-09-29 20:17 UTC（45 件）に、対応済みの失敗の再通知が発生した。再通知に伴う通知の欠落はない
 - 起動前に作られ起動後に失敗した Job の通知漏れは、job-notifier の再起動をまたいで実行された Job にだけ起こりうる。発生件数は確認していない
 - DeleteFunc の panic は、現在の Pod（2026-08-06 起動）の再起動回数が 0 なので、少なくともこの Pod では起きていない。relist が数秒で終わり、その間に削除された Job が無かったためと考えられる
+
+## フォローアップ
+
+この PR の範囲外で、別途検討する事項。
+
+- **EKS コントロールプレーンログの有効化の要否**: 今回は api / audit ログがすべて無効だったため、503 を返したのが停止中の旧 apiserver か手前のロードバランサかを特定できなかった。保存コストと引き換えに、次回の同種事象で発生元を追えるようにするかを判断する
+- **client-go と EKS のバージョン差の解消**: job-notifier は client-go v0.21.2 を使っており、クラスタのバージョンとの差が大きい。今回の再通知の原因ではないが、サポートされる組み合わせに戻す
+- **修正後の relist で抑止ログを確認する**: デプロイ後に relist が起きたら、`skip, Failed was already true` のログが出て、再通知が無いことを確かめる
 
 ## 改訂履歴
 
