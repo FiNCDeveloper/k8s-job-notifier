@@ -53,42 +53,13 @@ const (
 
 // Handle handles the notification.
 func (s *Slack) Handle(e event.Event) {
-
-	//TODO: おそらく起動したときはConditions == 0 で判定できるはず
-	// job createのときはconditionsが空でくる、他にいい判定方法があればそれに変える
-	job := e.Resource.(*batchv1.Job)
-	if len(job.Status.Conditions) == 0 {
-		return
-	}
-	annotations := job.GetAnnotations()
-
-	enabled := s.DefaultEnabled
-	switch s := annotations[EnabledAnnotation]; s {
-	case "true":
-		enabled = true
-	case "false":
-		enabled = false
-	}
-	if !enabled {
-		log.Printf("%s ignore, annotation value: %s", job.Name, annotations[EnabledAnnotation])
-		return
-	}
-
-	var notifyCondisions []string
-	if len(annotations[NotifyConditionAnnotation]) == 0 {
-		notifyCondisions = s.NotifyCondisions
-	} else {
-		notifyCondisions = strings.Split(annotations[NotifyConditionAnnotation], ",")
-	}
-
-	// Kubernetes 1.25+ では Job.Status.Conditions の先頭に FailureTarget /
-	// SuccessCriteriaMet 等の中間 condition が入るため、Conditions[0] 固定ではなく
-	// 全 condition を走査して Status=True のものだけを通知条件と照合する。
-	matched := matchCondition(job.Status.Conditions, notifyCondisions)
+	matched := s.NotifiableCondition(e)
 	if matched == nil {
 		return
 	}
 
+	job := e.Resource.(*batchv1.Job)
+	annotations := job.GetAnnotations()
 	channel := annotations[ChannelAnnotation]
 	if len(channel) == 0 {
 		channel = s.DefaultChannel
@@ -110,25 +81,103 @@ func (s *Slack) Handle(e event.Event) {
 	log.Printf("Message successfully sent to channel %s at %s", channelID, timestamp)
 }
 
-// matchCondition returns the first condition whose Status is True and whose
-// Type matches one of notifyConditions (case-insensitive, whitespace-trimmed).
+// NotifiableCondition returns the Job condition the event should be notified
+// about, or nil when the event must not be notified.
+func (s *Slack) NotifiableCondition(e event.Event) *batchv1.JobCondition {
+
+	//TODO: おそらく起動したときはConditions == 0 で判定できるはず
+	// job createのときはconditionsが空でくる、他にいい判定方法があればそれに変える
+	job := e.Resource.(*batchv1.Job)
+	if len(job.Status.Conditions) == 0 {
+		return nil
+	}
+	annotations := job.GetAnnotations()
+
+	enabled := s.DefaultEnabled
+	switch s := annotations[EnabledAnnotation]; s {
+	case "true":
+		enabled = true
+	case "false":
+		enabled = false
+	}
+	if !enabled {
+		log.Printf("%s ignore, annotation value: %s", job.Name, annotations[EnabledAnnotation])
+		return nil
+	}
+
+	var notifyCondisions []string
+	if len(annotations[NotifyConditionAnnotation]) == 0 {
+		notifyCondisions = s.NotifyCondisions
+	} else {
+		notifyCondisions = strings.Split(annotations[NotifyConditionAnnotation], ",")
+	}
+
+	var oldConditions []batchv1.JobCondition
+	if old, ok := e.OldResource.(*batchv1.Job); ok && old != nil {
+		oldConditions = old.Status.Conditions
+	}
+	matched := newlyMatchedCondition(oldConditions, job.Status.Conditions, notifyCondisions)
+	if matched == nil {
+		// 通知条件には一致するが変更前から True だった＝relist などによる再配信。
+		// 抑止が効いていることを本番ログで確かめられるように残す。
+		if already := matchCondition(job.Status.Conditions, notifyCondisions); already != nil {
+			log.Printf("%s/%s skip, %s was already true", job.Namespace, job.Name, already.Type)
+		}
+	}
+	return matched
+}
+
+// newlyMatchedCondition returns the first condition in conditions that matches
+// notifyConditions and was not already True in oldConditions. Returns nil if
+// there is none.
+//
+// 通知するのは condition が True に「なった」ときだけ。informer は watch 失敗後の
+// relist などで変化のない Job も Update として再配信するので、現在の状態だけで
+// 判定すると過去に失敗した Job をまとめて再通知してしまう。通知条件が複数ある場合
+// （例: "FailureTarget,Failed"）は先に True になったものが残り続けるので、一致した
+// 最初の condition だけでなく、新たに True になったものを探す。
+func newlyMatchedCondition(oldConditions, conditions []batchv1.JobCondition, notifyConditions []string) *batchv1.JobCondition {
+	// Kubernetes 1.25+ では Job.Status.Conditions の先頭に FailureTarget /
+	// SuccessCriteriaMet 等の中間 condition が入るため、Conditions[0] 固定ではなく
+	// 全 condition を走査して Status=True のものだけを通知条件と照合する。
+	for i := range conditions {
+		cond := conditions[i]
+		if !conditionMatches(cond, notifyConditions) {
+			continue
+		}
+		if matchCondition(oldConditions, []string{string(cond.Type)}) != nil {
+			continue
+		}
+		return &cond
+	}
+	return nil
+}
+
+// matchCondition returns the first condition that satisfies conditionMatches.
 // Returns nil if none matches.
 func matchCondition(conditions []batchv1.JobCondition, notifyConditions []string) *batchv1.JobCondition {
 	for i := range conditions {
 		cond := conditions[i]
-		if cond.Status != corev1.ConditionTrue {
-			continue
-		}
-
-		conType := strings.ToLower(string(cond.Type))
-		for _, con := range notifyConditions {
-			con = strings.ToLower(strings.TrimSpace(con))
-			if con == conType {
-				return &cond
-			}
+		if conditionMatches(cond, notifyConditions) {
+			return &cond
 		}
 	}
 	return nil
+}
+
+// conditionMatches reports whether cond's Status is True and its Type matches
+// one of notifyConditions (case-insensitive, whitespace-trimmed).
+func conditionMatches(cond batchv1.JobCondition, notifyConditions []string) bool {
+	if cond.Status != corev1.ConditionTrue {
+		return false
+	}
+	conType := strings.ToLower(string(cond.Type))
+	for _, con := range notifyConditions {
+		if strings.ToLower(strings.TrimSpace(con)) == conType {
+			return true
+		}
+	}
+	return false
 }
 
 func slackColor(t batchv1.JobConditionType) string {

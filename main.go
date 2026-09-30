@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/FiNCDeveloper/k8s-job-notifier/controller"
@@ -30,7 +31,12 @@ func main() {
 
 	go runHeartbeat()
 
-	c := controller.NewMainController(kubeClient)
+	h, err := handler.CreateHandler()
+	if err != nil {
+		log.Fatalf("failed to create handler: %s", err)
+	}
+
+	c := controller.NewMainController(kubeClient, h)
 	c.Run()
 }
 
