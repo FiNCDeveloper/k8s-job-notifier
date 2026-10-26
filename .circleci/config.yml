@@ -1,7 +1,8 @@
 version: 2.1
 
 orbs:
-  aws-ecr: circleci/aws-ecr@6.14.0
+  aws-ecr: circleci/aws-ecr@9.9.0
+  aws-cli: circleci/aws-cli@5.4.2
 
 jobs:
   test:
@@ -39,17 +40,26 @@ jobs:
     machine:
       enabled: true
       docker_layer_caching: true
-    environment:
-      AWS_ECR_ACCOUNT_URL: 759549166074.dkr.ecr.ap-northeast-1.amazonaws.com
-      AWS_REGION: "ap-northeast-1"
     working_directory: ~/go/src/github.com/FiNCDeveloper/job_notifier
     steps:
       - checkout
-      - aws-ecr/build-and-push-image:
-          create-repo: true
-          no-output-timeout: 10m
+      # OIDC で circleci-oidc-role2 を AssumeRole する。
+      # set_aws_env_vars（既定 true）により一時認証情報が BASH_ENV に書かれ、
+      # 後続ステップでは context default の静的キーより優先される
+      - aws-ecr/build_and_push_image:
+          checkout: false
+          auth:
+            - aws-cli/setup:
+                role_arn: "arn:aws:iam::759549166074:role/circleci-oidc-role2"
+                role_session_name: "circleci-session"
+                session_duration: "3600"
+                region: ap-northeast-1
+          account_id: "759549166074"
+          region: ap-northeast-1
+          create_repo: true
+          no_output_timeout: 10m
           repo: job_notifier
-          skip-when-tags-exist: false
+          skip_when_tags_exist: false
           tag: 'latest,${CIRCLE_SHA1},${CIRCLE_TAG}'
 
 workflows:
